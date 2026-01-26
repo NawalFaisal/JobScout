@@ -1,0 +1,9 @@
+apscheduler
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+pandas
+openpyxl
+requests
+playwright
