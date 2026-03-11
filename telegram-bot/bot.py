@@ -128,11 +128,11 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     """Start the bot."""
     if not TOKEN:
-        logger.error("❌ TELEGRAM_BOT_TOKEN not found!")
+        logger.error("TELEGRAM_BOT_TOKEN not set")
         return
     
-    print(f"✅ Bot Token: {TOKEN[:10]}...")
-    print(f"✅ API URL: {API_URL}")
+    print(f"Bot token: {TOKEN[:10]}...")
+    print(f"API URL: {API_URL}")
     
     # Create Application
     application = Application.builder().token(TOKEN).build()
@@ -145,9 +145,9 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     
     # Start the bot
-    logger.info("🤖 Starting Telegram bot...")
-    print("🚀 Bot is starting and will begin polling for messages...")
-    print("📱 Go to Telegram and message your bot: @jobscout_NawalF_bot")
+    logger.info("Starting Telegram bot...")
+    print("Bot is starting, polling for messages...")
+    print("Ready. Message your bot on Telegram: @jobscout_NawalF_bot")
     
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 

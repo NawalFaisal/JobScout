@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JobScout</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+      background: #ffffff;
+      color: #000000;
+      padding: 1.5rem 2rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 1200px;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      border-bottom: 1px solid #000000;
+      padding-bottom: 0.6rem;
+    }
+
+    header h1 {
+      font-size: 1.75rem;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #000000;
+    }
+
+    #last-updated {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #000000;
+    }
+
+    /* ── Section label ── */
+    .section-label {
+      font-size: 0.6rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #000000;
+    }
+
+    /* ── Stat cards ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0;
+      border: 1px solid #000000;
+    }
+
+    .stat-card {
+      background: #ffffff;
+      padding: 1.1rem 1.5rem;
+      border-right: 1px solid #000000;
+    }
+
+    .stat-card:last-child {
+      border-right: none;
+    }
+
+    .stat-card .label {
+      font-size: 0.6rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #000000;
+      margin-bottom: 0.4rem;
+    }
+
+    .stat-card .value {
+      font-size: 2.25rem;
+      font-weight: 700;
+      color: #000000;
+      letter-spacing: -0.02em;
+      line-height: 1;
+    }
+
+    /* ── Chart ── */
+    .chart-card {
+      background: #ffffff;
+      border: 1px solid #000000;
+      padding: 1rem 1.25rem 0.75rem;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .chart-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      border-bottom: 1px solid #000000;
+      padding-bottom: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .chart-title {
+      font-size: 0.6rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #000000;
+    }
+
+    .chart-wrap {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+    }
+
+
+    .error {
+      font-size: 0.8rem;
+      color: #000000;
+      border: 1px solid #000000;
+      border-left: 3px solid #000000;
+      padding: 0.75rem 1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <header>
+      <h1>JobScout</h1>
+      <span id="last-updated">—</span>
+    </header>
+
+    <p class="section-label">Overview</p>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="label">Total Jobs</div>
+        <div class="value" id="stat-total">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Last 24 Hours</div>
+        <div class="value" id="stat-24h">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Last 7 Days</div>
+        <div class="value" id="stat-7d">—</div>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-header">
+        <span class="chart-title">Top Companies by Job Count</span>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="chart"></canvas>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    async function load() {
+      try {
+        const res = await fetch('/api/stats/summary');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        document.getElementById('stat-total').textContent = data.total_jobs ?? '—';
+        document.getElementById('stat-24h').textContent   = data.jobs_last_24h ?? '—';
+        document.getElementById('stat-7d').textContent    = data.jobs_last_7d ?? '—';
+        document.getElementById('last-updated').textContent =
+          'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        const companies = (data.top_companies ?? []).map(c => c.company.toUpperCase());
+        const counts    = (data.top_companies ?? []).map(c => c.count);
+
+        const wrap = document.querySelector('.chart-wrap');
+        new Chart(document.getElementById('chart'), {
+          type: 'bar',
+          data: {
+            labels: companies,
+            datasets: [{
+              data: counts,
+              backgroundColor: '#888888',
+              hoverBackgroundColor: '#666666',
+              borderRadius: 0,
+              borderSkipped: false,
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#ffffff',
+                borderColor: '#000000',
+                borderWidth: 1,
+                titleColor: '#000000',
+                bodyColor: '#000000',
+                titleFont: { size: 9, weight: '700', family: 'Arial' },
+                bodyFont:  { size: 12, weight: '700', family: 'Arial' },
+                padding: 8,
+                callbacks: {
+                  label: ctx => `${ctx.parsed.y} jobs`
+                }
+              }
+            },
+            scales: {
+              x: {
+                ticks: {
+                  color: '#000000',
+                  font: { size: 10, weight: '700' },
+                },
+                grid:   { display: false },
+                border: { color: '#000000' }
+              },
+              y: {
+                beginAtZero: true,
+                ticks: { color: '#000000', font: { size: 10 }, precision: 0 },
+                grid:   { color: '#e8e8e8' },
+                border: { color: '#000000' }
+              }
+            }
+          }
+        });
+
+      } catch (err) {
+        document.querySelector('.chart-card').innerHTML =
+          `<div class="error">Failed to load data: ${err.message}</div>`;
+        document.getElementById('last-updated').textContent = 'Error';
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>

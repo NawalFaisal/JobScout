@@ -13,13 +13,14 @@ import traceback
 import sys
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment
+from openpyxl.chart import BarChart, Reference
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # Forced output for Docker logs
 sys.stdout.reconfigure(line_buffering=True)
-print("🚀 JobScout Backend Starting...", flush=True)
+print("JobScout Backend Starting...", flush=True)
 
 # ===== CONFIG =====
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -101,13 +102,13 @@ def init_database():
             engine = create_engine(DATABASE_URL)
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
-            print("✅ Connected to PostgreSQL")
+            print("Connected to PostgreSQL")
             Base.metadata.create_all(bind=engine)
             SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
             return
         except Exception as e:
             if i < 9:
-                print(f"⚠️ Retrying PostgreSQL... ({i+1}/10)")
+                print(f"Retrying PostgreSQL... ({i+1}/10)")
                 time.sleep(3)
             else:
                 raise
@@ -153,6 +154,15 @@ def parse_workday_date(date_text):
 
 # ===== RELEVANCE SCORING =====
 _RELEVANCE_KEYWORDS = ["intern", "co-op", "junior", "new grad", "entry level"]
+
+_TITLE_FILTER_KEYWORDS = [
+    "intern", "co-op", "coop", "co op", "new grad",
+    "junior", "entry level", "summer 2026", "graduate"
+]
+
+def title_is_relevant(title: str) -> bool:
+    t = title.lower()
+    return any(kw in t for kw in _TITLE_FILTER_KEYWORDS)
 
 def compute_relevance_score(title: str, description: str) -> int:
     text = f"{title} {description}".lower()
@@ -200,16 +210,16 @@ def send_telegram_alert(message: str):
 def scrape_workday_with_playwright():
     """Scrape Workday career sites with Playwright"""
     print("\n" + "="*60, flush=True)
-    print("🔍 SCRAPING WORKDAY SITES (THE GOOD STUFF)", flush=True)
-    print(f"⏰ Started at: {datetime.utcnow()}", flush=True)
+    print("SCRAPING WORKDAY SITES", flush=True)
+    print(f"Started at: {datetime.utcnow()}", flush=True)
     print("="*60, flush=True)
 
     all_jobs = []
 
     try:
-        print("🌐 Launching Playwright browser...", flush=True)
+        print("Launching Playwright browser...", flush=True)
         p = sync_playwright().start()
-        print("✅ Playwright context created", flush=True)
+        print("Playwright context created", flush=True)
 
         # CRITICAL: Docker-compatible browser launch arguments
         browser = p.chromium.launch(
@@ -222,16 +232,16 @@ def scrape_workday_with_playwright():
                 '--single-process'
             ]
         )
-        print(f"✅ Browser launched successfully", flush=True)
+        print("Browser launched successfully", flush=True)
 
         context = browser.new_context(
             viewport={'width': 1920, 'height': 1080},
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         )
-        print("✅ Browser context created", flush=True)
+        print("Browser context created", flush=True)
         
         for idx, (company, url) in enumerate(WORKDAY_COMPANIES.items(), 1):
-            print(f"\n🏢 [{idx}/{len(WORKDAY_COMPANIES)}] {company}...", flush=True)
+            print(f"\n[{idx}/{len(WORKDAY_COMPANIES)}] {company}", flush=True)
             print(f"   URL: {url[:60]}...", flush=True)
 
             MAX_RETRIES = 3
@@ -239,9 +249,9 @@ def scrape_workday_with_playwright():
                 page = None
                 try:
                     page = context.new_page()
-                    print(f"   📄 Navigating to page... (attempt {attempt}/{MAX_RETRIES})", flush=True)
+                    print(f"   Navigating to page... (attempt {attempt}/{MAX_RETRIES})", flush=True)
                     page.goto(url, wait_until='domcontentloaded', timeout=30000)
-                    print(f"   ✅ Page loaded", flush=True)
+                    print("   Page loaded", flush=True)
 
                     time.sleep(3)  # Load for JS
 
@@ -267,11 +277,11 @@ def scrape_workday_with_playwright():
                     elif 'apply.deloitte.com' in url:
                         jobs = scrape_generic_jobs(page, company)
                     else:
-                        print(f"   ⚠️ No specific scraper for this site, using generic", flush=True)
+                        print("   No specific scraper for this site, using generic", flush=True)
                         jobs = scrape_generic_jobs(page, company)
 
                     all_jobs.extend(jobs)
-                    print(f"   ✅ Found {len(jobs)} tech internship jobs", flush=True)
+                    print(f"   Found {len(jobs)} jobs", flush=True)
 
                     page.close()
                     time.sleep(2)
@@ -283,27 +293,27 @@ def scrape_workday_with_playwright():
                             page.close()
                         except:
                             pass
-                    print(f"   ❌ Attempt {attempt}/{MAX_RETRIES} failed for {company}: {e}", flush=True)
+                    print(f"   Attempt {attempt}/{MAX_RETRIES} failed for {company}: {e}", flush=True)
                     traceback.print_exc()
                     if attempt < MAX_RETRIES:
-                        print(f"   ⏳ Waiting 60s before retry...", flush=True)
+                        print("   Waiting 60s before retry...", flush=True)
                         time.sleep(60)
                     else:
-                        print(f"   🚨 All {MAX_RETRIES} attempts failed for {company}", flush=True)
+                        print(f"   All {MAX_RETRIES} attempts failed for {company}", flush=True)
                         send_telegram_alert(f"⚠️ {company} scraper has been failing — check logs.")
         
         browser.close()
         p.stop()
-        print("✅ Browser closed", flush=True)
+        print("Browser closed", flush=True)
 
     except Exception as e:
-        print(f"\n❌ PLAYWRIGHT ERROR: {e}", flush=True)
-        print(f"📋 Full traceback:", flush=True)
+        print(f"\nPLAYWRIGHT ERROR: {e}", flush=True)
+        print("Full traceback:", flush=True)
         traceback.print_exc()
         return []
 
     print(f"\n{'='*60}", flush=True)
-    print(f"✅ TOTAL: {len(all_jobs)} jobs from Workday sites", flush=True)
+    print(f"TOTAL: {len(all_jobs)} jobs scraped", flush=True)
     print("="*60, flush=True)
 
     return all_jobs
@@ -657,7 +667,7 @@ def scrape_shopify(page, company):
 def scrape_generic_jobs(page, company):
     """Generic job scraper - tries common selectors"""
     jobs = []
-    print(f"      🔍 Using generic scraper for {company}", flush=True)
+    print(f"      Using generic scraper for {company}", flush=True)
 
     try:
         time.sleep(2)
@@ -680,7 +690,7 @@ def scrape_generic_jobs(page, company):
                 links = page.query_selector_all(selector)
                 if links:
                     all_links.extend(links)
-                    print(f"      📎 Found {len(links)} links with selector: {selector}", flush=True)
+                    print(f"      Found {len(links)} links with selector: {selector}", flush=True)
                     break 
             except:
                 continue
@@ -798,6 +808,104 @@ def generate_excel(db: Session):
                     ws.cell(row, col).fill = fill
         
         ws.freeze_panes = 'A2'
+        ws.title = "All Jobs"
+        wb.save(filepath)
+
+        # ===== EXTEND: per-company sheets + summary sheet =====
+        wb = load_workbook(filepath)
+
+        HEADER_FILL = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+        HEADER_FONT = Font(color="FFFFFF", bold=True)
+        URGENT_FILL = PatternFill(start_color="FF6B6B", end_color="FF6B6B", fill_type="solid")
+        FRESH_FILL  = PatternFill(start_color="FFE66D", end_color="FFE66D", fill_type="solid")
+        COL_WIDTHS  = [15, 20, 50, 20, 12, 12, 30, 15, 60, 20]
+
+        def apply_sheet_formatting(ws):
+            for col in range(1, ws.max_column + 1):
+                cell = ws.cell(1, col)
+                cell.fill = HEADER_FILL
+                cell.font = HEADER_FONT
+            for i, width in enumerate(COL_WIDTHS, 1):
+                ws.column_dimensions[ws.cell(1, i).column_letter].width = width
+            for row in range(2, ws.max_row + 1):
+                age = ws.cell(row, 5).value
+                if age is not None and age < 60:
+                    fill = URGENT_FILL
+                elif age is not None and age < 180:
+                    fill = FRESH_FILL
+                else:
+                    continue
+                for col in range(1, ws.max_column + 1):
+                    ws.cell(row, col).fill = fill
+            ws.freeze_panes = 'A2'
+
+        # Group rows by company from the All Jobs sheet
+        all_ws = wb["All Jobs"]
+        headers = [all_ws.cell(1, c).value for c in range(1, all_ws.max_column + 1)]
+        company_col = headers.index("Company") + 1
+
+        company_rows: dict = {}
+        for row in range(2, all_ws.max_row + 1):
+            company = all_ws.cell(row, company_col).value
+            if company:
+                company_rows.setdefault(company, []).append(row)
+
+        # Create one sheet per company
+        for company, rows in sorted(company_rows.items()):
+            sheet_name = company[:31]  # Excel sheet name limit
+            ws_co = wb.create_sheet(title=sheet_name)
+            # Write header
+            for col in range(1, all_ws.max_column + 1):
+                ws_co.cell(1, col).value = all_ws.cell(1, col).value
+            # Write rows
+            for dest_row, src_row in enumerate(rows, 2):
+                for col in range(1, all_ws.max_column + 1):
+                    ws_co.cell(dest_row, col).value = all_ws.cell(src_row, col).value
+            apply_sheet_formatting(ws_co)
+
+        # Summary sheet
+        ws_sum = wb.create_sheet(title="Summary", index=0)
+
+        ws_sum["A1"] = "JobScout Summary"
+        ws_sum["A1"].font = Font(bold=True, size=14)
+
+        ws_sum["A3"] = "Total Jobs"
+        ws_sum["B3"] = len(data)
+        ws_sum["A3"].font = Font(bold=True)
+
+        ws_sum["A5"] = "Company"
+        ws_sum["B5"] = "Job Count"
+        ws_sum["A5"].fill = HEADER_FILL
+        ws_sum["A5"].font = HEADER_FONT
+        ws_sum["B5"].fill = HEADER_FILL
+        ws_sum["B5"].font = HEADER_FONT
+
+        company_counts = sorted(company_rows.items(), key=lambda x: -len(x[1]))
+        for i, (company, rows) in enumerate(company_counts, 6):
+            ws_sum.cell(i, 1).value = company
+            ws_sum.cell(i, 2).value = len(rows)
+
+        ws_sum.column_dimensions["A"].width = 25
+        ws_sum.column_dimensions["B"].width = 15
+
+        # Bar chart
+        last_row = 5 + len(company_counts)
+        chart = BarChart()
+        chart.type = "col"
+        chart.title = "Jobs per Company"
+        chart.y_axis.title = "Count"
+        chart.x_axis.title = "Company"
+        chart.legend = None
+        chart.shape = 4
+        chart.width = 20
+        chart.height = 12
+
+        data_ref = Reference(ws_sum, min_col=2, min_row=5, max_row=last_row)
+        cats_ref = Reference(ws_sum, min_col=1, min_row=6, max_row=last_row)
+        chart.add_data(data_ref, titles_from_data=True)
+        chart.set_categories(cats_ref)
+        ws_sum.add_chart(chart, "D5")
+
         wb.save(filepath)
         return filepath
     except:
@@ -833,7 +941,7 @@ def root():
 def scrape(background_tasks: BackgroundTasks):
     """Trigger background scraping - creates its own DB session"""
     print("\n" + "="*60, flush=True)
-    print("📨 POST /scrape - Triggering background task...", flush=True)
+    print("POST /scrape - Triggering background task...", flush=True)
     print("="*60, flush=True)
     background_tasks.add_task(run_scrape)
     return {"message": "Scraping Workday sites...", "status": "started"}
@@ -841,28 +949,28 @@ def scrape(background_tasks: BackgroundTasks):
 
 def run_scrape():
     """Run scraper with its own database session - CRITICAL FIX"""
-    print("\n" + "🔥"*30, flush=True)
-    print("🚀 BACKGROUND SCRAPE TASK STARTED!", flush=True)
-    print(f"⏰ Time: {datetime.utcnow()}", flush=True)
-    print("🔥"*30 + "\n", flush=True)
+    print("\n" + "="*60, flush=True)
+    print("BACKGROUND SCRAPE TASK STARTED", flush=True)
+    print(f"Time: {datetime.utcnow()}", flush=True)
+    print("="*60 + "\n", flush=True)
 
     # Not passed from request creating own session
     if not SessionLocal:
-        print("❌ ERROR: Database not initialized!", flush=True)
+        print("ERROR: Database not initialized", flush=True)
         return
 
     db = SessionLocal()
-    print("✅ Created new database session for background task", flush=True)
+    print("Created new database session for background task", flush=True)
 
     try:
         # Test DB connection
         db.execute(text("SELECT 1"))
-        print("✅ Database connection verified", flush=True)
+        print("Database connection verified", flush=True)
 
         # Run the scraper
-        print("\n📞 Calling scrape_workday_with_playwright()...", flush=True)
+        print("\nCalling scrape_workday_with_playwright()...", flush=True)
         jobs = scrape_workday_with_playwright()
-        print(f"\n✅ Scraper returned {len(jobs)} jobs", flush=True)
+        print(f"\nScraper returned {len(jobs)} jobs", flush=True)
 
         new = 0
         notified = 0
@@ -873,7 +981,11 @@ def run_scrape():
                 existing = db.query(Job).filter(Job.url.contains(clean_url[:100])).first()
 
                 if existing:
-                    print(f"  ⏭️ Skipping duplicate: {job['title'][:40]}", flush=True)
+                    print(f"  Skipping duplicate: {job['title'][:40]}", flush=True)
+                    continue
+
+                if not title_is_relevant(job['title']):
+                    print(f"  Filtered out: {job['title'][:50]}", flush=True)
                     continue
 
                 new_job = Job(
@@ -899,31 +1011,31 @@ def run_scrape():
                     if send_telegram_notification(job):
                         new_job.notified = True
                         notified += 1
-                        print(f"  📱 Telegram sent: {job['company']}: {job['title'][:40]}", flush=True)
+                        print(f"  Telegram sent: {job['company']}: {job['title'][:40]}", flush=True)
 
-                print(f"  ✅ NEW: {job['company']}: {job['title'][:50]}", flush=True)
+                print(f"  NEW: {job['company']}: {job['title'][:50]}", flush=True)
 
             except Exception as e:
-                print(f"  ❌ Error saving job: {e}", flush=True)
+                print(f"  Error saving job: {e}", flush=True)
                 traceback.print_exc()
 
         db.commit()
         print(f"\n" + "="*60, flush=True)
-        print(f"📊 SCRAPE COMPLETE: {new} new jobs, {notified} notifications", flush=True)
+        print(f"SCRAPE COMPLETE: {new} new jobs, {notified} notifications", flush=True)
         print("="*60, flush=True)
 
         # Generate Excel
         generate_excel(db)
-        print("📁 Excel file generated", flush=True)
+        print("Excel file generated", flush=True)
 
     except Exception as e:
-        print(f"\n❌ FATAL ERROR IN run_scrape(): {e}", flush=True)
+        print(f"\nFATAL ERROR IN run_scrape(): {e}", flush=True)
         traceback.print_exc()
         db.rollback()
 
     finally:
         db.close()
-        print("🔒 Database session closed", flush=True)
+        print("Database session closed", flush=True)
 
 @app.get("/jobs")
 def get_jobs(db: Session = Depends(get_db)):
@@ -955,9 +1067,9 @@ def update_status(job_id: int, status: str, notes: str = "", db: Session = Depen
 @app.get("/test-scrape")
 def test_scrape_sync(db: Session = Depends(get_db)):
     """Run scrape SYNCHRONOUSLY for debugging - returns immediately with results"""
-    print("\n" + "🧪"*30, flush=True)
-    print("🧪 RUNNING SYNCHRONOUS TEST SCRAPE", flush=True)
-    print("🧪"*30, flush=True)
+    print("\n" + "="*60, flush=True)
+    print("RUNNING SYNCHRONOUS TEST SCRAPE", flush=True)
+    print("="*60, flush=True)
 
     try:
         jobs = scrape_workday_with_playwright()
@@ -967,7 +1079,7 @@ def test_scrape_sync(db: Session = Depends(get_db)):
         for job in jobs[:5]: 
             try:
                 existing = db.query(Job).filter(Job.url.contains(job['url'][:100])).first()
-                if not existing:
+                if not existing and title_is_relevant(job['title']):
                     new_job = Job(
                         title=job['title'],
                         company=job['company'],
@@ -1088,6 +1200,11 @@ def get_stats_summary(db: Session = Depends(get_db)):
     }
 
 
+@app.get("/dashboard")
+def dashboard():
+    return FileResponse("/app/frontend/dashboard.html", media_type="text/html")
+
+
 @app.get("/health")
 def health_check():
     """Health check endpoint"""
@@ -1129,7 +1246,7 @@ def test_playwright():
     import time
     import threading
     
-    print("🧪 Starting Playwright test...", flush=True)
+    print("Starting Playwright test...", flush=True)
     start_time = time.time()
     
     try:
@@ -1202,7 +1319,7 @@ def test_playwright():
     except Exception as e:
         import traceback
         error_msg = str(e)
-        print(f"❌ Global error: {error_msg}", flush=True)
+        print(f"Global error: {error_msg}", flush=True)
         
         return {
             "success": False,
@@ -1297,7 +1414,7 @@ def test_playwright_fixed():
     start = time.time()
     
     try:
-        print("🧪 Starting guaranteed Playwright test...", flush=True)
+        print("Starting guaranteed Playwright test...", flush=True)
         from playwright.sync_api import sync_playwright
         
         print(f"[{time.time()-start:.1f}s] Playwright imported", flush=True)
@@ -1312,7 +1429,7 @@ def test_playwright_fixed():
                 
             )
             
-            print(f"[{time.time()-start:.1f}s] SUCCESS! Firefox launched", flush=True)
+            print(f"[{time.time()-start:.1f}s] Firefox launched", flush=True)
             print(f"[{time.time()-start:.1f}s] Version: {browser.version}", flush=True)
             
             # Quick test

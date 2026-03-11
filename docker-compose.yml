@@ -33,6 +33,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      - ./frontend:/app/frontend
     shm_size: "2gb"
     tmpfs:
       - /tmp:exec,size=1g

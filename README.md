@@ -1,22 +1,31 @@
-# 🚀 JobScout - Automated Canadian Internship Finder
+# JobScout
 
-## 📋 The Problem
-Manually checking 13+ company career sites daily for internships is:
-- **Time-consuming** (1-2 hours daily)
-- **Easy to miss** new postings  
-- **Repetitive and frustrating**
+Automated scraper that monitors 13 Canadian company career sites for tech internship and co-op postings. Runs on a 30-minute schedule, deduplicates against a PostgreSQL database, scores each posting for relevance, sends Telegram notifications for recent postings, and exposes a REST API with an Excel export and a web dashboard.
 
-## ✅ The Solution
-JobScout automatically:
-1. **Scrapes** 13 major Canadian company career sites every 30 minutes
-2. **Filters** for tech internships, co-ops, and student positions only
-3. **Saves** new jobs to PostgreSQL database (no duplicates)
-4. **Alerts** you via Telegram the moment new jobs are posted
-5. **Exports** to Excel with color-coded priority levels
+---
 
-**Result:** Reduce job search time by 90%, never miss a new posting.
+## Architecture
 
-## 🏢 Companies Monitored
+Three Docker services orchestrated via Compose:
+
+```
+[APScheduler / FastAPI]  ──scrapes──>  [Playwright / Chromium]
+        |                                       |
+        |──writes──>  [PostgreSQL]  <──reads──  |
+        |
+        |──notifies──>  [Telegram Bot API]
+        |
+        └──serves──>  GET /dashboard, GET /export/excel, GET /api/*
+```
+
+- **backend** — FastAPI application. Runs the scraper, owns the database schema, serves all API endpoints and the dashboard HTML.
+- **postgres** — PostgreSQL 15. Single `jobs` table plus an `applications` table for tracking application status.
+- **telegram-bot** — Thin wrapper around python-telegram-bot. Queries the backend API; handles `/search`, `/latest`, and `/help` commands.
+
+---
+
+## Companies Monitored
+
 | Banks | Telecom | Tech | Consulting |
 |-------|---------|------|------------|
 | RBC | Rogers | Amazon | Deloitte |
@@ -26,141 +35,139 @@ JobScout automatically:
 | BMO | | | |
 | Manulife | | | |
 
-## 🛠️ Tech Stack
-- **Backend:** Python, FastAPI, SQLAlchemy
-- **Scraping:** Playwright (browser automation)
-- **Database:** PostgreSQL
-- **Notifications:** Telegram Bot API
-- **Scheduling:** APScheduler
-- **Containerization:** Docker & Docker Compose
-- **Export:** Pandas, OpenPyXL (Excel generation)
+Each company has a dedicated scraper. Workday sites (`myworkdayjobs.com`) share a common scraper; RBC, TD, Taleo (Telus), Bell, Amazon, Microsoft, and Shopify each have site-specific implementations. A generic fallback handles anything else.
 
-## 🚀 Quick Start
+---
 
-### Prerequisites
-- Docker & Docker Compose
-- Telegram Bot Token (optional, for notifications)
+## Tech Stack
 
-### 1. Clone the repository
+| Layer | Technology |
+|-------|-----------|
+| API framework | FastAPI + Uvicorn |
+| Browser automation | Playwright (Chromium, headless) |
+| Database | PostgreSQL 15, SQLAlchemy ORM |
+| Scheduling | APScheduler (background, 30-minute interval) |
+| Notifications | Telegram Bot API (`requests`) |
+| Export | Pandas + openpyxl |
+| Containerization | Docker, Docker Compose |
+
+---
+
+## Getting Started
+
+**Prerequisites:** Docker and Docker Compose. A Telegram bot token is optional but required for notifications.
+
 ```bash
+# 1. Clone
 git clone https://github.com/NawalFaisal/JobScout.git
 cd JobScout
 
-2. Configure environment
-bash
+# 2. Configure
 cp .env.example .env
-# Edit .env with your settings
-3. Start with Docker
-bash
+# Edit .env — see Configuration section below
+
+# 3. Start
 docker compose up --build -d
-4. Verify it's running
-bash
+
+# 4. Verify
 curl http://localhost:8000/health
-# Should return: {"status":"healthy"}
-📡 API Endpoints
-Method	Endpoint	Description
-GET	/	API info and monitored companies
-GET	/health	Health check
-GET	/jobs	List all saved jobs
-GET	/stats	Scraping statistics
-POST	/scrape	Trigger manual scrape
-GET	/export/excel	Download jobs as Excel file
-GET	/test-scrape	Run synchronous test scrape
-🔔 Telegram Notifications
-Get instant alerts when new jobs are found:
+# {"status":"healthy",...}
+```
 
-text
-🚨 NEW BMO INTERNSHIP!
+The scraper runs automatically every 30 minutes. To trigger a run immediately:
 
-💼 Software Developer Intern - Summer 2026
-📍 Toronto, ON  
-⏰ Posted 15 minutes ago
+```bash
+curl -X POST http://localhost:8000/scrape
+```
 
-🔗 https://bmo.wd3.myworkdayjobs.com/...
+---
 
-APPLY NOW! 🚀
-Setup Telegram Notifications
-Create a bot with @BotFather
+## Configuration
 
-Get your Chat ID by messaging @userinfobot
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `DATABASE_URL` | PostgreSQL connection string | Yes (set automatically by Compose) |
+| `TELEGRAM_BOT_TOKEN` | Token from @BotFather | No |
+| `TELEGRAM_CHAT_ID` | Your chat ID from @userinfobot | No |
 
-Add to .env:
+---
 
-env
-TELEGRAM_BOT_TOKEN=your_bot_token
-TELEGRAM_CHAT_ID=your_chat_id
-📁 Project Structure
-text
+## API Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/` | Service info and list of monitored companies |
+| GET | `/health` | Health check |
+| GET | `/dashboard` | Web dashboard (HTML) |
+| GET | `/jobs` | All saved jobs, ordered by posted date (limit 100) |
+| GET | `/api/jobs/search` | Search jobs — params: `keyword`, `company`, `location` |
+| GET | `/api/jobs/latest` | 5 most recent internship postings |
+| GET | `/api/stats/summary` | Total jobs, last 24h, last 7d, top 5 companies |
+| GET | `/stats` | Full per-company job counts |
+| POST | `/scrape` | Trigger a background scrape |
+| GET | `/export/excel` | Download jobs as a formatted .xlsx file |
+| POST | `/jobs/{job_id}/status` | Update application status for a job |
+| GET | `/test-scrape` | Synchronous test scrape (debug) |
+| GET | `/db-test` | Database connectivity test |
+
+---
+
+## Filtering Logic
+
+Jobs are kept only if the title matches at least one inclusion keyword (intern, co-op, coop, co op, new grad, junior, entry level, summer 2026, graduate) and contains a tech-related term. A separate exclusion list drops non-technical roles (mechanical, civil, sales, marketing, etc.).
+
+Each saved job receives a relevance score (1–10) based on how many of the five core keywords appear in the title and description.
+
+---
+
+## Excel Export
+
+`GET /export/excel` returns a multi-sheet workbook:
+
+- **Summary** — total count, per-company breakdown, embedded bar chart
+- **All Jobs** — full dataset, color-coded by posting age (red < 1h, yellow < 3h)
+- **Per-company sheets** — one sheet per company with the same formatting
+
+---
+
+## Project Structure
+
+```
 JobScout/
 ├── backend/
-│   ├── main.py              # FastAPI app + scrapers
+│   ├── main.py              # FastAPI app, scrapers, scheduler, API endpoints
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── telegram-bot/
-│   ├── bot.py
+│   ├── bot.py               # Telegram command handlers, queries backend API
 │   ├── Dockerfile
 │   └── requirements.txt
+├── frontend/
+│   └── dashboard.html       # Single-file dashboard, served at /dashboard
 ├── docker-compose.yml
-├── .env.example
-└── README.md
-⚙️ Configuration
-Environment Variables
-Variable	Description	Required
-DATABASE_URL	PostgreSQL connection string	Yes
-TELEGRAM_BOT_TOKEN	Telegram bot token	No
-TELEGRAM_CHAT_ID	Your Telegram chat ID	No
-Customizing Job Filters
-Edit TECH_KEYWORDS and EXCLUDE_KEYWORDS in main.py:
+└── .env
+```
 
-python
-TECH_KEYWORDS = [
-    'software', 'developer', 'data', 'engineer', 
-    'python', 'java', 'react', 'cloud', ...
-]
+---
 
-EXCLUDE_KEYWORDS = [
-    'mechanical', 'civil', 'sales', 'marketing', ...
-]
-📊 Excel Export
-Export jobs with color-coded priority:
+## Development
 
-Priority	Color	Age
-🚨 URGENT	Red	< 1 hour
-⚠️ FRESH	Yellow	< 3 hours
-🟡 RECENT	Light	< 12 hours
-🔵 OLD	Default	> 12 hours
-bash
-curl http://localhost:8000/export/excel --output jobs.xlsx
-🧪 Development
-Run locally (without Docker)
-bash
+```bash
+# Run backend locally without Docker
 cd backend
 pip install -r requirements.txt
 playwright install chromium
-uvicorn main:app --reload
-View logs
-bash
+DATABASE_URL=postgresql://... uvicorn main:app --reload
+
+# Tail logs
 docker compose logs -f backend
-Test Playwright
-bash
+
+# Open a shell in the backend container
 docker exec -it jobscout-backend bash
-python -c "from playwright.sync_api import sync_playwright; print('✅ Playwright works')"
-🤝 Contributing
-Fork the repository
+```
 
-Create a feature branch (git checkout -b feature/new-company)
+---
 
-Commit changes (git commit -m 'Add new company scraper')
+## Author
 
-Push to branch (git push origin feature/new-company)
-
-Open a Pull Request
-
-📝 License
-MIT License - feel free to use this project for your own job search!
-
-👤 Author
-Nawal Faisal
-GitHub: @NawalFaisal
-
-LinkedIn: nawalfaisal
+Nawal Faisal — [GitHub](https://github.com/NawalFaisal) · [LinkedIn](https://linkedin.com/in/nawalfaisal)
