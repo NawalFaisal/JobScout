@@ -81,6 +81,7 @@ class Job(Base):
     is_internship = Column(Boolean, default=True)
     posted_date = Column(DateTime, nullable=True)
     notified = Column(Boolean, default=False)
+    relevance_score = Column(Integer, nullable=True)
 
 class Application(Base):
     __tablename__ = "applications"
@@ -150,6 +151,14 @@ def parse_workday_date(date_text):
     
     return now
 
+# ===== RELEVANCE SCORING =====
+_RELEVANCE_KEYWORDS = ["intern", "co-op", "junior", "new grad", "entry level"]
+
+def compute_relevance_score(title: str, description: str) -> int:
+    text = f"{title} {description}".lower()
+    count = sum(1 for kw in _RELEVANCE_KEYWORDS if kw in text)
+    return max(1, round(1 + (count / len(_RELEVANCE_KEYWORDS)) * 9))
+
 # ===== TELEGRAM =====
 def send_telegram_notification(job):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -177,7 +186,15 @@ APPLY NOW! 🚀"""
         return response.status_code == 200
     except:
         return False
-    
+
+def send_telegram_alert(message: str):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=10)
+    except:
+        pass
 
 # ===== WORKDAY SCRAPER - THE REAL DEAL =====
 def scrape_workday_with_playwright():
@@ -217,52 +234,63 @@ def scrape_workday_with_playwright():
             print(f"\n🏢 [{idx}/{len(WORKDAY_COMPANIES)}] {company}...", flush=True)
             print(f"   URL: {url[:60]}...", flush=True)
 
-            try:
-                page = context.new_page()
-                print(f"   📄 Navigating to page...", flush=True)
-                page.goto(url, wait_until='domcontentloaded', timeout=30000)
-                print(f"   ✅ Page loaded", flush=True)
+            MAX_RETRIES = 3
+            for attempt in range(1, MAX_RETRIES + 1):
+                page = None
+                try:
+                    page = context.new_page()
+                    print(f"   📄 Navigating to page... (attempt {attempt}/{MAX_RETRIES})", flush=True)
+                    page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                    print(f"   ✅ Page loaded", flush=True)
 
-                time.sleep(3)  # Load for JS
+                    time.sleep(3)  # Load for JS
 
-                # WORKDAY SPECIFIC SELECTORS
-                if 'myworkdayjobs.com' in url:
-                    jobs = scrape_workday_myworkday(page, company)
-                elif 'jobs.rbc.com' in url:
-                    jobs = scrape_rbc(page, company)
-                elif 'jobs.td.com' in url:
-                    jobs = scrape_td(page, company)
-                elif 'taleo.net' in url:
-                    jobs = scrape_taleo(page, company)
-                elif 'jobs.bce.ca' in url:
-                    jobs = scrape_bell(page, company)
-                elif 'amazon.jobs' in url:
-                    jobs = scrape_amazon(page, company)
-                elif 'careers.microsoft.com' in url:
-                    jobs = scrape_microsoft(page, company)
-                elif 'shopify.com/careers' in url:
-                    jobs = scrape_shopify(page, company)
-                elif 'jobs.scotiabank.com' in url:
-                    jobs = scrape_generic_jobs(page, company)
-                elif 'apply.deloitte.com' in url:
-                    jobs = scrape_generic_jobs(page, company)
-                else:
-                    print(f"   ⚠️ No specific scraper for this site, using generic", flush=True)
-                    jobs = scrape_generic_jobs(page, company)
+                    # WORKDAY SPECIFIC SELECTORS
+                    if 'myworkdayjobs.com' in url:
+                        jobs = scrape_workday_myworkday(page, company)
+                    elif 'jobs.rbc.com' in url:
+                        jobs = scrape_rbc(page, company)
+                    elif 'jobs.td.com' in url:
+                        jobs = scrape_td(page, company)
+                    elif 'taleo.net' in url:
+                        jobs = scrape_taleo(page, company)
+                    elif 'jobs.bce.ca' in url:
+                        jobs = scrape_bell(page, company)
+                    elif 'amazon.jobs' in url:
+                        jobs = scrape_amazon(page, company)
+                    elif 'careers.microsoft.com' in url:
+                        jobs = scrape_microsoft(page, company)
+                    elif 'shopify.com/careers' in url:
+                        jobs = scrape_shopify(page, company)
+                    elif 'jobs.scotiabank.com' in url:
+                        jobs = scrape_generic_jobs(page, company)
+                    elif 'apply.deloitte.com' in url:
+                        jobs = scrape_generic_jobs(page, company)
+                    else:
+                        print(f"   ⚠️ No specific scraper for this site, using generic", flush=True)
+                        jobs = scrape_generic_jobs(page, company)
 
-                all_jobs.extend(jobs)
-                print(f"   ✅ Found {len(jobs)} tech internship jobs", flush=True)
+                    all_jobs.extend(jobs)
+                    print(f"   ✅ Found {len(jobs)} tech internship jobs", flush=True)
 
-                page.close()
-                time.sleep(2)  
+                    page.close()
+                    time.sleep(2)
+                    break  # success — no more retries
 
-            except PlaywrightTimeout as e:
-                print(f"   ⏰ Timeout: {e}", flush=True)
-                continue
-            except Exception as e:
-                print(f"   ❌ Error: {e}", flush=True)
-                traceback.print_exc()
-                continue
+                except (PlaywrightTimeout, Exception) as e:
+                    if page:
+                        try:
+                            page.close()
+                        except:
+                            pass
+                    print(f"   ❌ Attempt {attempt}/{MAX_RETRIES} failed for {company}: {e}", flush=True)
+                    traceback.print_exc()
+                    if attempt < MAX_RETRIES:
+                        print(f"   ⏳ Waiting 60s before retry...", flush=True)
+                        time.sleep(60)
+                    else:
+                        print(f"   🚨 All {MAX_RETRIES} attempts failed for {company}", flush=True)
+                        send_telegram_alert(f"⚠️ {company} scraper has been failing — check logs.")
         
         browser.close()
         p.stop()
@@ -857,7 +885,8 @@ def run_scrape():
                     source=job['source'],
                     found_date=datetime.utcnow(),
                     posted_date=job.get('posted_date', datetime.utcnow()),
-                    notified=False
+                    notified=False,
+                    relevance_score=compute_relevance_score(job['title'], job.get('description', ''))
                 )
                 db.add(new_job)
                 db.flush()
@@ -899,7 +928,7 @@ def run_scrape():
 @app.get("/jobs")
 def get_jobs(db: Session = Depends(get_db)):
     jobs = db.query(Job).order_by(Job.posted_date.desc()).limit(100).all()
-    return {"count": len(jobs), "jobs": [{"id": j.id, "title": j.title, "company": j.company, "url": j.url} for j in jobs]}
+    return {"count": len(jobs), "jobs": [{"id": j.id, "title": j.title, "company": j.company, "url": j.url, "relevance_score": j.relevance_score} for j in jobs]}
 
 @app.get("/export/excel")
 def export(db: Session = Depends(get_db)):
@@ -948,7 +977,8 @@ def test_scrape_sync(db: Session = Depends(get_db)):
                         source=job['source'],
                         found_date=datetime.utcnow(),
                         posted_date=job.get('posted_date', datetime.utcnow()),
-                        notified=False
+                        notified=False,
+                        relevance_score=compute_relevance_score(job['title'], job.get('description', ''))
                     )
                     db.add(new_job)
                     new_count += 1
@@ -992,7 +1022,8 @@ def db_test(db: Session = Depends(get_db)):
             source="test",
             found_date=datetime.utcnow(),
             posted_date=datetime.utcnow(),
-            notified=False
+            notified=False,
+            relevance_score=compute_relevance_score("TEST - Delete Me", "Test job for debugging")
         )
         db.add(test_job)
         db.commit()
@@ -1033,6 +1064,28 @@ def get_stats(db: Session = Depends(get_db)):
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+@app.get("/api/stats/summary")
+def get_stats_summary(db: Session = Depends(get_db)):
+    """Summary stats: totals, recent activity, top companies"""
+    now = datetime.utcnow()
+    total = db.query(Job).count()
+    last_24h = db.query(Job).filter(Job.found_date > now - timedelta(hours=24)).count()
+    last_7d = db.query(Job).filter(Job.found_date > now - timedelta(days=7)).count()
+    top_companies = (
+        db.query(Job.company, func.count(Job.id).label("count"))
+        .group_by(Job.company)
+        .order_by(func.count(Job.id).desc())
+        .limit(5)
+        .all()
+    )
+    return {
+        "total_jobs": total,
+        "jobs_last_24h": last_24h,
+        "jobs_last_7d": last_7d,
+        "top_companies": [{"company": c, "count": n} for c, n in top_companies]
+    }
 
 
 @app.get("/health")
@@ -1359,21 +1412,26 @@ def diagnose_playwright():
 
 # ===== TELEGRAM BOT COMPATIBILITY ENDPOINTS =====
 @app.get("/api/jobs/search")
-def telegram_search(q: str = "", db: Session = Depends(get_db)):
-    """Simple search for Telegram bot"""
-    jobs = db.query(Job).filter(
-        Job.title.ilike(f"%{q}%") if q else True
-    ).filter(
-        Job.is_internship == True
-    ).order_by(Job.posted_date.desc()).limit(5).all()
-    
+def telegram_search(keyword: str = "", company: str = "", location: str = "", q: str = "", db: Session = Depends(get_db)):
+    """Search jobs by keyword, company, and/or location"""
+    # support legacy 'q' param as keyword fallback
+    search_term = keyword or q
+    query = db.query(Job).filter(Job.is_internship == True)
+    if search_term:
+        query = query.filter(Job.title.ilike(f"%{search_term}%"))
+    if company:
+        query = query.filter(Job.company.ilike(f"%{company}%"))
+    if location:
+        query = query.filter(Job.location.ilike(f"%{location}%"))
+    jobs = query.order_by(Job.posted_date.desc()).limit(20).all()
     return [{
         "title": j.title,
         "company": j.company,
         "location": j.location,
         "url": j.url,
         "date_posted": "Recent",
-        "source": j.source
+        "source": j.source,
+        "relevance_score": j.relevance_score
     } for j in jobs]
 
 @app.get("/api/jobs/latest")
